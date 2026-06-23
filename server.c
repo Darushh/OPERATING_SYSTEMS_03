@@ -69,22 +69,13 @@ typedef struct {
     int thread_id;
     request_queue_t *queue;
     server_log log;
+
+    struct Threads_stats stats;
 } worker_context_t;
 
 void *worker_main(void *arg)
 {
     worker_context_t *context = (worker_context_t *)arg;
-
-    threads_stats thread_stats = malloc(sizeof(struct Threads_stats));
-    if (thread_stats == NULL) {
-        unix_error("malloc error");
-    }
-
-    thread_stats->id = context->thread_id;
-    thread_stats->stat_req = 0;
-    thread_stats->dynm_req = 0;
-    thread_stats->post_req = 0;
-    thread_stats->total_req = 0;
 
     while (1) {
         request_job_t job = queue_dequeue(context->queue);
@@ -94,7 +85,7 @@ void *worker_main(void *arg)
         requestHandle(
             job.connfd,
             job.time_stats,
-            thread_stats,
+            &context->stats,
             context->log
         );
 
@@ -148,6 +139,12 @@ int main(int argc, char *argv[])
         worker_contexts[i].thread_id = i + 1;
         worker_contexts[i].queue = &request_queue;
         worker_contexts[i].log = log;
+
+        worker_contexts[i].stats.id = i + 1;
+        worker_contexts[i].stats.stat_req = 0;
+        worker_contexts[i].stats.dynm_req = 0;
+        worker_contexts[i].stats.post_req = 0;
+        worker_contexts[i].stats.total_req = 0;
 
         int rc = pthread_create(
             &worker_threads[i],

@@ -3,16 +3,6 @@
 #include "log.h"
 #include "queue.h"
 
-//
-// server.c: A very, very simple web server
-//
-// To run:
-//  ./server <portnum (above 2000)>
-//
-// Repeatedly handles HTTP requests sent to this port number.
-// Most of the work is done within routines written in request.c
-//
-
 // Parses command-line arguments
 void getargs(int *tcp_port, int *udp_port, int *num_threads, int *queue_size, 
     double *debug_sleep_time, int argc, char *argv[])
@@ -62,9 +52,10 @@ void getargs(int *tcp_port, int *udp_port, int *num_threads, int *queue_size,
     }
 }
 
-// TODO: HW3 — Task 1: Initialize the thread pool and request queue.
-// This server currently handles all requests in the main thread.
-
+/* Per-worker persistent state. 
+   Each worker has its own ID and statistics object,
+   while all workers share the same request queue and server log.
+*/
 typedef struct {
     int thread_id;
     request_queue_t *queue;
@@ -73,15 +64,22 @@ typedef struct {
     struct Threads_stats stats;
 } worker_context_t;
 
+/* 
+    Worker thread routine:
+    repeatedly takes the oldest request and handles it.
+*/
 void *worker_main(void *arg)
 {
     worker_context_t *context = (worker_context_t *)arg;
 
     while (1) {
+        // Wait for and remove the next FIFO request from the shared queue. 
         request_job_t job = queue_dequeue(context->queue);
 
         gettimeofday(&job.time_stats.task_dispatch, NULL);
 
+        //  The queue mutex is already released here. 
+        // Therefore, other workers can continue dequeuing while this request is handled.
         requestHandle(
             job.connfd,
             job.time_stats,
@@ -96,9 +94,6 @@ void *worker_main(void *arg)
 }
 
 // TODO: HW3 — Task 4: Add the UDP channel (see the UDP_* wrappers in segel.c).
-
-
-// TODO: HW3 — Extend getargs() to parse the full argument list.
 
 int main(int argc, char *argv[])
 {
@@ -119,11 +114,12 @@ int main(int argc, char *argv[])
         argv
     );
 
-    // These will be used later for UDP support and debug sleep inside the log. //
+    // Dara's part 
     (void)udp_port;
     (void)debug_sleep_time;
 
     request_queue_t request_queue;
+    // Shared bounded FIFO queue used by the master and all workers.
     queue_init(&request_queue, queue_size);
 
     pthread_t *worker_threads = malloc(sizeof(pthread_t) * num_threads);
@@ -133,7 +129,7 @@ int main(int argc, char *argv[])
     if (worker_threads == NULL || worker_contexts == NULL) {
         unix_error("malloc error");
     }
-
+    // Create a fixed-size worker pool once at server startup.
     for (int i = 0; i < num_threads; i++) 
     {
         worker_contexts[i].thread_id = i + 1;
@@ -164,6 +160,7 @@ int main(int argc, char *argv[])
         struct sockaddr_in clientaddr;
         clientlen = sizeof(clientaddr);
 
+        //  Master thread accepts incoming TCP connections.
         connfd = Accept(
             listenfd,
             (SA *)&clientaddr,
@@ -173,11 +170,18 @@ int main(int argc, char *argv[])
         request_job_t job;
         job.connfd = connfd;
 
+        // Record the first moment the server sees this request.
         gettimeofday(&job.time_stats.task_arrival, NULL);
 
+        // Dara's part - 
+        // Now these are temporary placeholder values and we need to replace them with real timestaps:
+        // log_enter - immediately before requesting the log reader/writer lock.
+        // log_exit - after the log operation releases its lock.
         job.time_stats.log_enter = job.time_stats.task_arrival;
         job.time_stats.log_exit = job.time_stats.task_arrival;
 
+        // Add the request to the bounded FIFO queue. 
+        // If the queue is full, the master blocks inside queue_enqueue.
         queue_enqueue(&request_queue, job);
     }
 

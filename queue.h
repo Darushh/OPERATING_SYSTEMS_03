@@ -4,11 +4,21 @@
 #include "segel.h"
 #include "request.h"
 
+/*
+A single TCP request waiting to be handled by a worker.
+The master thread fills task_arrival.
+The worker fills task_dispatch when it removes the job from the queue.
+*/
 typedef struct {
     int connfd;
     time_stats time_stats;
 } request_job_t;
 
+/*
+Bounded circular FIFO queue shared by 
+one producer (the master thread) 
+and mulitiple consumers: worker threads
+*/
 typedef struct {
     request_job_t *jobs;
     int capacity;

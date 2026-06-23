@@ -1,0 +1,5 @@
+*.o
+server
+client
+output.cgi
+public/

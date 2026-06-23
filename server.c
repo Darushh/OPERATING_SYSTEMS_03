@@ -13,13 +13,52 @@
 //
 
 // Parses command-line arguments
-void getargs(int *port, int argc, char *argv[])
+void getargs(int *tcp_port, int *udp_port, int *num_threads, int *queue_size, 
+    double *debug_sleep_time, int argc, char *argv[])
 {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+    if (argc != 6)
+    {
+        fprintf(
+            stderr,
+            "Usage: %s <tcp_port> <udp_port> <threads> <queue_size> <debug_sleep_time>\n",
+            argv[0]
+        );
         exit(1);
     }
-    *port = atoi(argv[1]);
+    *tcp_port = atoi(argv[1]);
+    *udp_port = atoi(argv[2]);
+    *num_threads = atoi(argv[3]);
+    *queue_size = atoi(argv[4]);
+    *debug_sleep_time = atof(argv[5]);
+
+    if (*tcp_port <= 1024 || *tcp_port > 65535)
+    {
+        fprintf(stderr, "TCP port must be between 1025 and 65535\n");
+        exit(1);
+    }
+
+    if (*udp_port <= 1024 || *udp_port > 65535)
+    {
+        fprintf(stderr, "UDP port must be between 1025 and 65535\n");
+        exit(1);
+    }
+
+    if (*tcp_port == *udp_port)
+    {
+         fprintf(stderr, "TCP and UDP ports must be different\n");
+        exit(1);
+    }
+
+    if (*num_threads <= 0)
+    {
+        fprintf(stderr, "Number of threads must be positive\n");
+        exit(1);
+    }
+
+    if (*queue_size <= 0) {
+        fprintf(stderr, "Queue size must be positive\n");
+        exit(1);
+    }
 }
 
 // TODO: HW3 — Task 1: Initialize the thread pool and request queue.
@@ -34,12 +73,21 @@ int main(int argc, char *argv[])
     // Create the global server log
     server_log log = create_log();
 
-    int listenfd, connfd, port, clientlen;
+    int listenfd, connfd, clientlen;
+    int tcp_port, udp_port, num_threads, queue_size;
+    double debug_sleep_time;
     struct sockaddr_in clientaddr;
 
-    getargs(&port, argc, argv);
+    getargs(&tcp_port,&udp_port,&num_threads,&queue_size,&debug_sleep_time,argc,argv);
 
-    listenfd = Open_listenfd(port);
+    listenfd = Open_listenfd(tcp_port);
+
+    /*  thread pool, queue, UDP, log debug sleep. */
+    (void)udp_port;
+    (void)num_threads;
+    (void)queue_size;
+    (void)debug_sleep_time;
+
     while (1) {
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA *)&clientaddr, (socklen_t*) &clientlen);

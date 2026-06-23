@@ -1,6 +1,7 @@
 #include "segel.h"
 #include "request.h"
 #include "log.h"
+#include "queue.h"
 
 //
 // server.c: A very, very simple web server
@@ -64,7 +65,47 @@ void getargs(int *tcp_port, int *udp_port, int *num_threads, int *queue_size,
 // TODO: HW3 — Task 1: Initialize the thread pool and request queue.
 // This server currently handles all requests in the main thread.
 
+typedef struct {
+    int thread_id;
+    request_queue_t *queue;
+    server_log log;
+} worker_context_t;
+
+void *worker_main(void *arg)
+{
+    worker_context_t *context = (worker_context_t *)arg;
+
+    threads_stats thread_stats = malloc(sizeof(struct Threads_stats));
+    if (thread_stats == NULL) {
+        unix_error("malloc error");
+    }
+
+    thread_stats->id = context->thread_id;
+    thread_stats->stat_req = 0;
+    thread_stats->dynm_req = 0;
+    thread_stats->post_req = 0;
+    thread_stats->total_req = 0;
+
+    while (1) {
+        request_job_t job = queue_dequeue(context->queue);
+
+        gettimeofday(&job.time_stats.task_dispatch, NULL);
+
+        requestHandle(
+            job.connfd,
+            job.time_stats,
+            thread_stats,
+            context->log
+        );
+
+        Close(job.connfd);
+    }
+
+    return NULL;
+}
+
 // TODO: HW3 — Task 4: Add the UDP channel (see the UDP_* wrappers in segel.c).
+
 
 // TODO: HW3 — Extend getargs() to parse the full argument list.
 
@@ -76,49 +117,80 @@ int main(int argc, char *argv[])
     int listenfd, connfd, clientlen;
     int tcp_port, udp_port, num_threads, queue_size;
     double debug_sleep_time;
-    struct sockaddr_in clientaddr;
 
-    getargs(&tcp_port,&udp_port,&num_threads,&queue_size,&debug_sleep_time,argc,argv);
+    getargs(
+        &tcp_port,
+        &udp_port,
+        &num_threads,
+        &queue_size,
+        &debug_sleep_time,
+        argc,
+        argv
+    );
+
+    // These will be used later for UDP support and debug sleep inside the log. //
+    (void)udp_port;
+    (void)debug_sleep_time;
+
+    request_queue_t request_queue;
+    queue_init(&request_queue, queue_size);
+
+    pthread_t *worker_threads = malloc(sizeof(pthread_t) * num_threads);
+
+    worker_context_t *worker_contexts = malloc(sizeof(worker_context_t) * num_threads);
+
+    if (worker_threads == NULL || worker_contexts == NULL) {
+        unix_error("malloc error");
+    }
+
+    for (int i = 0; i < num_threads; i++) 
+    {
+        worker_contexts[i].thread_id = i + 1;
+        worker_contexts[i].queue = &request_queue;
+        worker_contexts[i].log = log;
+
+        int rc = pthread_create(
+            &worker_threads[i],
+            NULL,
+            worker_main,
+            &worker_contexts[i]
+        );
+
+        if (rc != 0) {
+            posix_error(rc, "pthread_create error");
+        }
+    }
 
     listenfd = Open_listenfd(tcp_port);
 
-    /*  thread pool, queue, UDP, log debug sleep. */
-    (void)udp_port;
-    (void)num_threads;
-    (void)queue_size;
-    (void)debug_sleep_time;
-
     while (1) {
+        struct sockaddr_in clientaddr;
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, (socklen_t*) &clientlen);
 
-        // TODO: HW3 — Record the request arrival time here.
+        connfd = Accept(
+            listenfd,
+            (SA *)&clientaddr,
+            (socklen_t *)&clientlen
+        );
 
-        // DEMO PURPOSE ONLY:
-        // This is a dummy request handler that immediately processes the
-        // request in the master thread without concurrency. Replace this with
-        // logic that enqueues the connection so a worker thread handles it.
+        request_job_t job;
+        job.connfd = connfd;
 
-        threads_stats t = malloc(sizeof(struct Threads_stats));
-        t->id = 0;             // Thread ID (placeholder)
-        t->stat_req = 0;       // Static request count
-        t->dynm_req = 0;       // Dynamic request count
-        t->post_req = 0;       // POST request count
-        t->total_req = 0;      // Total request count
+        gettimeofday(&job.time_stats.task_arrival, NULL);
 
-        time_stats dum;
+        job.time_stats.log_enter = job.time_stats.task_arrival;
+        job.time_stats.log_exit = job.time_stats.task_arrival;
 
-        // gettimeofday(&arrival, NULL);
-
-        // Call the request handler (immediate in master thread — DEMO ONLY)
-        requestHandle(connfd, dum, t, log);
-
-        free(t); // Cleanup
-        Close(connfd); // Close the connection
+        queue_enqueue(&request_queue, job);
     }
 
-    // Clean up the server log before exiting
+
+    Close(listenfd);
+    queue_destroy(&request_queue);
     destroy_log(log);
 
-    // TODO: HW3 — Add cleanup code for the thread pool and queue.
+    free(worker_threads);
+    free(worker_contexts);
+
+    return 0;
 }

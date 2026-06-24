@@ -569,10 +569,32 @@ int Open_listenfd(int port)
  * UDP socket interface wrappers
  ****************************/
 
-/* $begin udp_open */
+/*
+ * Creates a UDP socket and binds it to the given port.
+ * The socket accepts UDP packets sent to this port on any local network interface.
+ * Returns the UDP socket file descriptor for later use with select(), recvfrom(), and sendto().
+ */
 int UDP_Open(int port)
 {
-//TODO
+    int udpfd;
+    int optval = 1;
+    struct sockaddr_in serveraddr;
+
+    // Create an IPv4 UDP socket
+    udpfd = Socket(AF_INET, SOCK_DGRAM, 0);
+
+    // Allow quick reuse of the port after restarting the server
+    Setsockopt(udpfd,SOL_SOCKET, SO_REUSEADDR, (const void *)&optval, sizeof(int));
+
+    // Bind the socket to all local IP address on the request UDP port.
+    bzero((char *)&serveraddr, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serveraddr.sin_port = htons((unsigned short)port);
+
+    Bind(udpfd, (SA *)&serveraddr, sizeof(serveraddr));
+
+    return udpfd;
 }
 /* $end udp_open */
 

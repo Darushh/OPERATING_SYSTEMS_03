@@ -37,6 +37,11 @@ void queue_enqueue(request_queue_t *queue, request_job_t job);
 
 request_job_t queue_dequeue(request_queue_t *queue);
 
+// Removes one TCP job while queue->mutex is already locked.
+// Precondition: queue is not empty.
+// The caller must unlock queue->mutex after this function returns.
+request_job_t queue_dequeue_locked(request_queue_t *queue);
+
 void queue_destroy(request_queue_t *queue);
 
 #endif

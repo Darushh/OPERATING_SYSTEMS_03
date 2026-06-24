@@ -69,15 +69,16 @@ typedef struct {
 
     struct Threads_stats stats;
 
+    int udpfd;
+
     // UDP Request intended specifically for this worker.
     // The worker should handle these before taking another TCP job.
     udp_request_t *udp_head;
     udp_request_t *udp_tail;
-
-    pthread_mutex_t udp_mutex;
 } worker_context_t;
 
-// Helper functions for the per-worker UDP queue.
+// Add a UDP ping to the queue of its target worker.
+// The TCP queue mutex also protects all per-worker UDP queues.
 void enqueue_udp_request(
     worker_context_t *worker,
     struct sockaddr_in *client_addr,
@@ -94,7 +95,7 @@ void enqueue_udp_request(
     request->client_len = client_len;
     request->next = NULL;
 
-    pthread_mutex_lock(&worker->udp_mutex);
+    pthread_mutex_lock(&worker->queue->mutex);
 
     if (worker->udp_tail == NULL) {
         worker->udp_head = request;
@@ -104,13 +105,17 @@ void enqueue_udp_request(
         worker->udp_tail = request;
     }
 
-    pthread_mutex_unlock(&worker->udp_mutex);
+    // A worker may currently sleep because no TCP job exists.
+    // Wake workers so the target worker can notice its UDP ping.
+    pthread_cond_broadcast(&worker->queue->not_empty);
+
+    pthread_mutex_unlock(&worker->queue->mutex);
 }
 
-udp_request_t *dequeue_udp_request(worker_context_t *worker)
+// Remove one pending UDP ping.
+// Precondition: worker->queue->mutex is already locked.
+udp_request_t *dequeue_udp_request_locked(worker_context_t *worker)
 {
-    pthread_mutex_lock(&worker->udp_mutex);
-
     udp_request_t *request = worker->udp_head;
 
     if (request != NULL) {
@@ -120,10 +125,23 @@ udp_request_t *dequeue_udp_request(worker_context_t *worker)
             worker->udp_tail = NULL;
         }
     }
-
-    pthread_mutex_unlock(&worker->udp_mutex);
-
     return request;
+}
+
+// Send this worker's current statistics back to the UDP client.
+// UDP pings do not count as HTTP jobs and do not update any counters.
+void handle_udp_request(worker_context_t *worker, udp_request_t *request)
+{
+    char response[MAXLINE] = "";
+
+    int response_len = append_thread_log(response, &worker->stats);
+
+    UDP_Write(
+        worker->udpfd,
+        &request->client_addr,
+        response,
+        response_len
+    );
 }
 
 // Worker thread routine: repeatedly takes the oldest request and handles it. 
@@ -132,21 +150,48 @@ void *worker_main(void *arg)
     worker_context_t *context = (worker_context_t *)arg;
 
     while (1) {
-        // Wait for and remove the next FIFO request from the shared queue. 
-        request_job_t job = queue_dequeue(context->queue);
+        udp_request_t *udp_request = NULL;
+        request_job_t tcp_job;
+        int handling_udp = 0;
 
-        gettimeofday(&job.time_stats.task_dispatch, NULL);
+        pthread_mutex_lock(&context->queue->mutex);
 
-        //  The queue mutex is already released here. 
-        // Therefore, other workers can continue dequeuing while this request is handled.
+        // Sleep only when this worker has no UDP ping and there are no TCP jobs at all.
+        while (context->udp_head == NULL && context->queue->count == 0) {
+            pthread_cond_wait(
+                &context->queue->not_empty,
+                &context->queue->mutex
+            );
+        }
+
+        // UDP has priority for this worker.
+        // A UDP ping is never inserted into the TCP FIFO queue.
+        if (context->udp_head != NULL) {
+            udp_request = dequeue_udp_request_locked(context);
+            handling_udp = 1;
+        } else {
+            tcp_job = queue_dequeue_locked(context->queue);
+        }
+
+        pthread_mutex_unlock(&context->queue->mutex);
+
+        if (handling_udp) 
+        {
+            handle_udp_request(context, udp_request);
+            free(udp_request);
+            continue;
+        }
+
+        gettimeofday(&tcp_job.time_stats.task_dispatch, NULL);
+
         requestHandle(
-            job.connfd,
-            job.time_stats,
+            tcp_job.connfd,
+            tcp_job.time_stats,
             &context->stats,
             context->log
         );
 
-        Close(job.connfd);
+        Close(tcp_job.connfd);
     }
 
     return NULL;
@@ -157,7 +202,7 @@ int main(int argc, char *argv[])
     // Create the global server log
     server_log log = create_log();
 
-    int listenfd, connfd, clientlen;
+    int listenfd, connfd, udpfd;
     int tcp_port, udp_port, num_threads, queue_size;
     double debug_sleep_time;
 
@@ -172,7 +217,6 @@ int main(int argc, char *argv[])
     );
 
     // Dara's part 
-    (void)udp_port;
     (void)debug_sleep_time;
 
     request_queue_t request_queue;
@@ -186,12 +230,18 @@ int main(int argc, char *argv[])
     if (worker_threads == NULL || worker_contexts == NULL) {
         unix_error("malloc error");
     }
+
+    listenfd = Open_listenfd(tcp_port);
+    udpfd = UDP_Open(udp_port);
+
     // Create a fixed-size worker pool once at server startup.
     for (int i = 0; i < num_threads; i++) 
     {
         worker_contexts[i].thread_id = i + 1;
         worker_contexts[i].queue = &request_queue;
         worker_contexts[i].log = log;
+        worker_contexts[i].udpfd = udpfd;
+
 
         worker_contexts[i].stats.id = i + 1;
         worker_contexts[i].stats.stat_req = 0;
@@ -201,8 +251,6 @@ int main(int argc, char *argv[])
 
         worker_contexts[i].udp_head = NULL;
         worker_contexts[i].udp_tail = NULL;
-
-        pthread_mutex_init(&worker_contexts[i].udp_mutex, NULL);
 
         int rc = pthread_create(
             &worker_threads[i],
@@ -216,39 +264,77 @@ int main(int argc, char *argv[])
         }
     }
 
-    listenfd = Open_listenfd(tcp_port);
+    while (1) 
+    {
+        fd_set readfds;
 
-    while (1) {
+        FD_ZERO(&readfds);
+        FD_SET(listenfd, &readfds);
+        FD_SET(udpfd, &readfds);
+
+        int maxfd = (listenfd > udpfd) ? listenfd : udpfd;
+
+    // Sleep until either:
+    // 1) a new TCP connection arrives
+    // 2) a UDP statistics ping arrives
+    Select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+    // Handle UDP first when both sockets are ready - because of the UDP priority.
+    if (FD_ISSET(udpfd, &readfds)) {
+        char buffer[MAXLINE];
+        struct sockaddr_in udp_clientaddr;
+
+        int bytes_read = UDP_Read(
+            udpfd,
+            &udp_clientaddr,
+            buffer,
+            MAXLINE - 1
+        );
+
+        if (bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+
+            char *endptr;
+            long requested_id = strtol(buffer, &endptr, 10);
+
+            // Valid UDP message format for now: ASCII thread ID, for example "1" or "3".
+            if (endptr != buffer && requested_id >= 1 && requested_id <= num_threads) {
+                enqueue_udp_request(
+                    &worker_contexts[requested_id - 1],
+                    &udp_clientaddr,
+                    sizeof(udp_clientaddr)
+                );
+            }
+        }
+    }
+
+    if (FD_ISSET(listenfd, &readfds)) {
         struct sockaddr_in clientaddr;
-        clientlen = sizeof(clientaddr);
+        socklen_t clientlen = sizeof(clientaddr);
 
-        //  Master thread accepts incoming TCP connections.
         connfd = Accept(
             listenfd,
             (SA *)&clientaddr,
-            (socklen_t *)&clientlen
+            &clientlen
         );
 
         request_job_t job;
         job.connfd = connfd;
 
-        // Record the first moment the server sees this request.
         gettimeofday(&job.time_stats.task_arrival, NULL);
 
-        // Dara's part - 
-        // Now these are temporary placeholder values and we need to replace them with real timestaps:
-        // log_enter - immediately before requesting the log reader/writer lock.
-        // log_exit - after the log operation releases its lock.
+        // Dare's Part - now it is temporary log timestamps.
+        // please replace these inside the real logger
         job.time_stats.log_enter = job.time_stats.task_arrival;
         job.time_stats.log_exit = job.time_stats.task_arrival;
 
-        // Add the request to the bounded FIFO queue. 
-        // If the queue is full, the master blocks inside queue_enqueue.
         queue_enqueue(&request_queue, job);
     }
+}
 
 
     Close(listenfd);
+    Close(udpfd);
     queue_destroy(&request_queue);
     destroy_log(log);
 

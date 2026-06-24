@@ -36,23 +36,31 @@ void queue_enqueue(request_queue_t *queue, request_job_t job)
 
     pthread_mutex_unlock(&queue->mutex);
 }
+
+request_job_t queue_dequeue_locked(request_queue_t *queue)
+{
+    request_job_t job = queue->jobs[queue->head];
+
+    queue->head = (queue->head + 1) % queue->capacity;
+    queue->count--;
+
+    // The master may now enqueue another TCP request. 
+    pthread_cond_signal(&queue->not_full);
+
+    return job;
+}
+
 // Remove the oldest request from the head of the queue. 
 // Blocks a worker thread while the queue is empty.
 request_job_t queue_dequeue(request_queue_t *queue)
 {
-    request_job_t job;
-
     pthread_mutex_lock(&queue->mutex);
 
     while (queue->count == 0) {
         pthread_cond_wait(&queue->not_empty, &queue->mutex);
     }
 
-    job = queue->jobs[queue->head];
-    queue->head = (queue->head + 1) % queue->capacity;
-    queue->count--;
-
-    pthread_cond_signal(&queue->not_full);
+    request_job_t job = queue_dequeue_locked(queue);
 
     pthread_mutex_unlock(&queue->mutex);
 

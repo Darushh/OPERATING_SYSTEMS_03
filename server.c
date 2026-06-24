@@ -52,6 +52,12 @@ void getargs(int *tcp_port, int *udp_port, int *num_threads, int *queue_size,
     }
 }
 
+typedef struct udp_request {
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+    struct udp_request *next;
+} udp_request_t;
+
 /* Per-worker persistent state. 
    Each worker has its own ID and statistics object,
    while all workers share the same request queue and server log.
@@ -62,12 +68,65 @@ typedef struct {
     server_log log;
 
     struct Threads_stats stats;
+
+    // UDP Request intended specifically for this worker.
+    // The worker should handle these before taking another TCP job.
+    udp_request_t *udp_head;
+    udp_request_t *udp_tail;
+
+    pthread_mutex_t udp_mutex;
 } worker_context_t;
 
-/* 
-    Worker thread routine:
-    repeatedly takes the oldest request and handles it.
-*/
+// Helper functions for the per-worker UDP queue.
+void enqueue_udp_request(
+    worker_context_t *worker,
+    struct sockaddr_in *client_addr,
+    socklen_t client_len
+)
+{
+    udp_request_t *request = malloc(sizeof(udp_request_t));
+
+    if (request == NULL) {
+        unix_error("malloc error");
+    }
+
+    request->client_addr = *client_addr;
+    request->client_len = client_len;
+    request->next = NULL;
+
+    pthread_mutex_lock(&worker->udp_mutex);
+
+    if (worker->udp_tail == NULL) {
+        worker->udp_head = request;
+        worker->udp_tail = request;
+    } else {
+        worker->udp_tail->next = request;
+        worker->udp_tail = request;
+    }
+
+    pthread_mutex_unlock(&worker->udp_mutex);
+}
+
+udp_request_t *dequeue_udp_request(worker_context_t *worker)
+{
+    pthread_mutex_lock(&worker->udp_mutex);
+
+    udp_request_t *request = worker->udp_head;
+
+    if (request != NULL) {
+        worker->udp_head = request->next;
+
+        if (worker->udp_head == NULL) {
+            worker->udp_tail = NULL;
+        }
+    }
+
+    pthread_mutex_unlock(&worker->udp_mutex);
+
+    return request;
+}
+
+// Worker thread routine: repeatedly takes the oldest request and handles it. 
 void *worker_main(void *arg)
 {
     worker_context_t *context = (worker_context_t *)arg;
@@ -92,8 +151,6 @@ void *worker_main(void *arg)
 
     return NULL;
 }
-
-// TODO: HW3 — Task 4: Add the UDP channel (see the UDP_* wrappers in segel.c).
 
 int main(int argc, char *argv[])
 {
@@ -141,6 +198,11 @@ int main(int argc, char *argv[])
         worker_contexts[i].stats.dynm_req = 0;
         worker_contexts[i].stats.post_req = 0;
         worker_contexts[i].stats.total_req = 0;
+
+        worker_contexts[i].udp_head = NULL;
+        worker_contexts[i].udp_tail = NULL;
+
+        pthread_mutex_init(&worker_contexts[i].udp_mutex, NULL);
 
         int rc = pthread_create(
             &worker_threads[i],

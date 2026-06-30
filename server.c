@@ -200,7 +200,7 @@ void *worker_main(void *arg)
 int main(int argc, char *argv[])
 {
     // Create the global server log
-    server_log log = create_log();
+    server_log log;
 
     int listenfd, connfd, udpfd;
     int tcp_port, udp_port, num_threads, queue_size;
@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
         argc,
         argv
     );
-
+    log = create_log(debug_sleep_time);
     // Dara's part 
     (void)debug_sleep_time;
 

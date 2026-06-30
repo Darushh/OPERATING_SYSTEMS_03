@@ -148,6 +148,7 @@ void requestHandle(int fd, time_stats tm_stats, threads_stats t_stats, server_lo
     int body_len = 0;
     char resp_headers[MAXBUF];
 
+    t_stats->total_req++; //inc requests
     Rio_readinitb(&rio, fd);
     Rio_readlineb(&rio, buf, MAXLINE);
     sscanf(buf, "%s %s %s", method, uri, version);
@@ -170,6 +171,10 @@ void requestHandle(int fd, time_stats tm_stats, threads_stats t_stats, server_lo
             body_len = sbuf.st_size;
             body_content = requestPrepareStatic(filename, body_len);
 
+            t_stats->stat_req++; //reconzied static request
+            gettimeofday(&tm_stats.log_enter, NULL); //getting entry time to log
+            add_to_log(log, &tm_stats, t_stats); //writing to log
+
             // Fixed Content-Length format string and sprintf overlap
             sprintf(resp_headers, "HTTP/1.0 200 OK\r\n");
             sprintf(resp_headers + strlen(resp_headers), "Server: OS-HW3 Web Server\r\n");
@@ -182,11 +187,19 @@ void requestHandle(int fd, time_stats tm_stats, threads_stats t_stats, server_lo
             }
             body_content = requestPrepareDynamic(filename, cgiargs, &body_len);
 
+            t_stats->dynm_req++; //not static - then dynamic request inc
+            gettimeofday(&tm_stats.log_enter, NULL); 
+            add_to_log(log, &tm_stats, t_stats); 
+
             sprintf(resp_headers, "HTTP/1.0 200 OK\r\n");
             sprintf(resp_headers + strlen(resp_headers), "Server: OS-HW3 Web Server\r\n");
         }
     } else if (strcasecmp(method, "POST") == 0) {
         body_len = get_log(log, (char**)&body_content);
+        t_stats->post_req++; //post request inc
+        gettimeofday(&tm_stats.log_enter, NULL); 
+        body_len = get_log(log, (char**)&body_content); //reading from log
+        gettimeofday(&tm_stats.log_exit, NULL); 
 
         sprintf(resp_headers, "HTTP/1.0 200 OK\r\n");
         sprintf(resp_headers + strlen(resp_headers), "Server: OS-HW3 Web Server\r\n");

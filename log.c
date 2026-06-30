@@ -37,7 +37,7 @@ server_log create_log(double debug_sleep_time) {
     log->size = 0;
     log->debug_sleep_time = debug_sleep_time;
     //initializing counters:
-=   log->active_readers = 0;
+    log->active_readers = 0;
     log->waiting_readers = 0;
     log->active_writers = 0;
     log->waiting_writers = 0;

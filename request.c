@@ -195,7 +195,6 @@ void requestHandle(int fd, time_stats tm_stats, threads_stats t_stats, server_lo
             sprintf(resp_headers + strlen(resp_headers), "Server: OS-HW3 Web Server\r\n");
         }
     } else if (strcasecmp(method, "POST") == 0) {
-        body_len = get_log(log, (char**)&body_content);
         t_stats->post_req++; //post request inc
         gettimeofday(&tm_stats.log_enter, NULL); 
         body_len = get_log(log, (char**)&body_content); //reading from log

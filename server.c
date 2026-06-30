@@ -200,7 +200,7 @@ void *worker_main(void *arg)
 int main(int argc, char *argv[])
 {
     // Create the global server log
-    server_log log;
+    server_log log = NULL;
 
     int listenfd, connfd, udpfd;
     int tcp_port, udp_port, num_threads, queue_size;
@@ -216,8 +216,6 @@ int main(int argc, char *argv[])
         argv
     );
     log = create_log(debug_sleep_time);
-    // Dara's part 
-    (void)debug_sleep_time;
 
     request_queue_t request_queue;
     // Shared bounded FIFO queue used by the master and all workers.

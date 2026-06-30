@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include "request.h"
+#include "segel.h"
 
 struct Server_Log {
     char *buffer;               //dynamic text buffer

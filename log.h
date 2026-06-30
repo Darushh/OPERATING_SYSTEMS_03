@@ -1,24 +1,7 @@
 #ifndef SERVER_LOG_H
 #define SERVER_LOG_H
 
-struct Server_Log {
-    char *buffer;      //buffer saves all the log
-    int size;          //logs size
-    int capacity;      //current buffer's size
-    
-    //manegment of shared resources:
-    pthread_mutex_t mutex;   
-    pthread_cond_t read_cond;
-    pthread_cond_t write_cond;
-    
-    //counters for mangment of readers and writers
-    int active_readers;
-    int waiting_readers;
-    int active_writers;
-    int waiting_writers; 
-    
-    double debug_sleep_time; //sleep time for debugging
-};
+
 // TODO:
 // Implement a thread-safe server log system.
 // - The log should support concurrent access from multiple threads.

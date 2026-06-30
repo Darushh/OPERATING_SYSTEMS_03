@@ -1,16 +1,33 @@
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "log.h"
 
-// Opaque struct definition
 struct Server_Log {
-    // TODO: Implement internal log storage (e.g., dynamic buffer, linked list, etc.)
+    char *buffer;      //buffer saves all the log
+    int size;          //logs size
+    int capacity;      //current buffer's size
+    
+    //manegment of shared resources:
+    pthread_mutex_t mutex;   
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    
+    //counters for mangment of readers and writers
+    int active_readers;
+    int waiting_readers;
+    int active_writers;
+    int waiting_writers; 
+    
+    double debug_sleep_time; //sleep time for debugging
 };
 
 // Creates a new server log instance (stub)
 server_log create_log() {
-    // TODO: Allocate and initialize internal log structure
-    return (server_log)malloc(sizeof(struct Server_Log));
+    Server_Log* log = (Server_Log)malloc(sizeof(struct Server_Log));
+    if (!log) return NULL;
+    
+    
 }
 
 // Destroys and frees the log (stub)
@@ -23,14 +40,6 @@ void destroy_log(server_log log) {
 int get_log(server_log log, char** dst) {
     // TODO: Return the full contents of the log as a dynamically allocated string
     // This function should handle concurrent access
-
-    const char* dummy = "Log is not implemented.\n";
-    int len = strlen(dummy);
-    *dst = (char*)malloc(len + 1); // Allocate for caller
-    if (*dst != NULL) {
-        strcpy(*dst, dummy);
-    }
-    return len;
 }
 
 // Appends a new entry to the log (no-op stub)

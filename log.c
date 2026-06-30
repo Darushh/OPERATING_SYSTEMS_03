@@ -60,15 +60,37 @@ void destroy_log(server_log log) {
 
 // Returns dummy log content as string (stub)
 int get_log(server_log log, char** dst) {
-    // TODO: Return the full contents of the log as a dynamically allocated string
-    // This function should handle concurrent access
-
-    const char* dummy = "Log is not implemented.\n";
-    int len = strlen(dummy);
-    *dst = (char*)malloc(len + 1); // Allocate for caller
-    if (*dst != NULL) {
-        strcpy(*dst, dummy);
+    if (!log || !dst) return 0;
+    //critical section:
+    pthread_mutex_lock(&log->mutex);
+    log->waiting_readers++;
+    
+    //prffering writers - if we have active\waiting writres
+    // then send reader to wait
+    while (log->active_writers > 0 || log->waiting_writers > 0) {
+        pthread_cond_wait(&log->read_cond, &log->mutex);
     }
+    
+    log->waiting_readers--;
+    log->active_readers++;
+    pthread_mutex_unlock(&log->mutex);
+    if (log->debug_sleep_time > 0) usleep((useconds_t)(log->debug_sleep_time * 1000000));
+    //coping the log:
+    int len = log->size;
+    *dst = (char*)malloc(len + 1);
+    if (*dst != NULL) {
+        strcpy(*dst, log->buffer);
+    }
+    //finished critical section:
+    pthread_mutex_lock(&log->mutex);
+    log->active_readers--;
+    
+    //if we were the last reader, and there's a writer waiting
+    if (log->active_readers == 0 && log->waiting_writers > 0) {
+        pthread_cond_signal(&log->write_cond);
+    }
+    
+    pthread_mutex_unlock(&log->mutex);
     return len;
 }
 

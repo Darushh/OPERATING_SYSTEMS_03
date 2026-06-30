@@ -2,6 +2,9 @@
 #include <string.h>
 #include <pthread.h>
 #include "log.h"
+#include <unistd.h>
+#include <sys/time.h>
+#include "request.h"
 
 struct Server_Log {
     char *buffer;               //dynamic text buffer
@@ -96,6 +99,43 @@ int get_log(server_log log, char** dst) {
 
 // Appends a new entry to the log (no-op stub)
 void add_to_log(server_log log, time_stats* tm_stats, threads_stats t_stats){
-    // TODO: Append the provided data to the log
-    // This function should handle concurrent access
+    if (!log || !tm_stats || !t_stats) return;
+    //critical section:
+    pthread_mutex_lock(&log->mutex);
+    log->waiting_writers++;
+    while (log->active_readers > 0 || log->active_writers > 0) {
+        pthread_cond_wait(&log->write_cond, &log->mutex);
+    }
+    
+    log->waiting_writers--;
+    log->active_writers = 1;
+    //finish critical section:
+    pthread_mutex_unlock(&log->mutex);
+    if (log->debug_sleep_time > 0) usleep((useconds_t)(log->debug_sleep_time * 1000000)); 
+    //getting exit time from log
+    gettimeofday(&tm_stats->log_exit, NULL);
+    char stats_buf[MAXBUF] = "";
+    int data_len = append_stats(stats_buf, t_stats, *tm_stats);
+    int required_size = log->size + (log->size > 0 ? 1 : 0) + data_len + 1;
+    if (required_size > log->capacity) {
+        while (log->capacity < required_size) log->capacity *= 2;
+        log->buffer = (char*)realloc(log->buffer, log->capacity);
+    }
+    if (log->size > 0) {
+        strcat(log->buffer, "#");
+        log->size++;
+    }
+    strcat(log->buffer, stats_buf);
+    log->size += data_len;
+    //another critical section:
+    pthread_mutex_lock(&log->mutex);
+    log->active_writers = 0;
+    //first check any waiting writers, and only after that readers
+    if (log->waiting_writers > 0) {
+        pthread_cond_signal(&log->write_cond);
+    } else if (log->waiting_readers > 0) {
+        pthread_cond_broadcast(&log->read_cond);
+    }
+    //finish critical section:
+    pthread_mutex_unlock(&log->mutex);
 }

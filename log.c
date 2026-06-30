@@ -95,7 +95,7 @@ int get_log(server_log log, char** dst) {
 }
 
 // Appends a new entry to the log (no-op stub)
-void add_to_log(server_log log, const char* data, int data_len) {
+void add_to_log(server_log log, time_stats* tm_stats, threads_stats t_stats){
     // TODO: Append the provided data to the log
     // This function should handle concurrent access
 }

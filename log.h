@@ -10,11 +10,14 @@
 //   This means that if a writer is waiting, new readers should be blocked until the writer is done.
 // - Use appropriate synchronization primitives (e.g., pthread mutexes and condition variables).
 // - The log should allow appending entries and returning the full log content.
-
+struct Time_stats;
+struct Threads_stats;
+typedef struct Time_stats time_stats;
+typedef struct Threads_stats* threads_stats;
 typedef struct Server_Log* server_log;
 
 // Creates a new server log instance
-server_log create_log();
+server_log create_log(double debug_sleep_time);
 
 // Destroys and frees the log
 void destroy_log(server_log log);
@@ -24,6 +27,6 @@ void destroy_log(server_log log);
 int get_log(server_log log, char** dst);
 
 // Appends a new entry to the log
-void add_to_log(server_log log, const char* data, int data_len);
+void add_to_log(server_log log, time_stats* tm_stats, threads_stats t_stats);
 
 #endif // SERVER_LOG_H
